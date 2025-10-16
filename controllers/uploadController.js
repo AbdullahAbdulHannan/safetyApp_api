@@ -112,67 +112,117 @@ async function uploadToImgbb(buffer, filename, retries = 2) {
   }
 }
 
+// Upload controller with proper error handling
 exports.uploadToImgbb = async (req, res) => {
   try {
     console.log('Request received at /upload');
 
     if (!req.file) {
       console.error('No file uploaded');
-      return res.status(400).json({ error: 'No file uploaded' });
+      return res.status(400).json({ 
+        success: false,
+        error: 'No file uploaded. Please select an image to upload.'
+      });
     }
 
     console.log('File received:', req.file.originalname, 'Size:', req.file.size);
 
+    // Check file type
+    if (!req.file.mimetype.startsWith('image/')) {
+      console.error('Invalid file type:', req.file.mimetype);
+      return res.status(400).json({ 
+        success: false,
+        error: 'Only image files are allowed (JPEG, PNG, etc.)'
+      });
+    }
+
+    // Check file size (5MB limit)
+    const maxSize = 5 * 1024 * 1024; // 5MB
+    if (req.file.size > maxSize) {
+      console.error('File too large:', req.file.size);
+      return res.status(400).json({ 
+        success: false,
+        error: 'Image size must be less than 5MB'
+      });
+    }
+
     // Check cache first
     const cacheKey = generateCacheKey(req.file.buffer);
+    
     if (uploadCache.has(cacheKey)) {
-      console.log('Image found in cache, returning cached URL');
-      return res.json({ url: uploadCache.get(cacheKey) });
+      console.log('Serving from cache');
+      return res.json({ 
+        success: true,
+        url: uploadCache.get(cacheKey) 
+      });
     }
 
-    // Enhanced compression with multiple quality levels
-    console.log('Compressing image...');
-    let compressedBuffer = await compressImage(req.file.buffer, 70);
-    
-    // If still too large, compress more aggressively
-    if (compressedBuffer.length > 2 * 1024 * 1024) { // If > 2MB
-      console.log('Image still large, compressing more aggressively...');
-      compressedBuffer = await compressImage(req.file.buffer, 50);
+    // Compress image before upload
+    let compressedImage;
+    try {
+      compressedImage = await compressImage(req.file.buffer);
+      console.log('Image compressed successfully');
+    } catch (compressError) {
+      console.error('Image compression failed, using original:', compressError);
+      compressedImage = req.file.buffer; // Fallback to original
     }
     
-    console.log('Original size:', req.file.size, 'Compressed size:', compressedBuffer.length);
+    try {
+      // Upload to ImgBB
+      console.log('Uploading to ImgBB...');
+      const imgbbResponse = await uploadToImgbb(
+        compressedImage,
+        req.file.originalname || `image-${Date.now()}.jpg`
+      );
 
-    // Upload to ImgBB with retry mechanism
-    console.log('Uploading to ImgBB...');
-    const imageUrl = await uploadToImgbb(compressedBuffer, req.file.originalname);
-    console.log('ImgBB upload successful:', imageUrl);
+      if (!imgbbResponse?.data?.data?.url) {
+        console.error('Invalid ImgBB response:', JSON.stringify(imgbbResponse?.data));
+        throw new Error('Failed to get image URL from the image hosting service');
+      }
 
-    // Cache the result
-    manageCache();
-    uploadCache.set(cacheKey, imageUrl);
+      const imageUrl = imgbbResponse.data.data.url;
+      console.log('Image uploaded successfully:', imageUrl);
+      
+      // Cache the result
+      manageCache();
+      uploadCache.set(cacheKey, imageUrl);
 
-    res.json({ url: imageUrl });
-
-  } catch (err) {
-    console.error('Error uploading image:', err.message);
+      return res.json({ 
+        success: true,
+        url: imageUrl 
+      });
+    } catch (uploadError) {
+      console.error('Upload to ImgBB failed:', uploadError);
+      
+      if (uploadError.message.includes('API key')) {
+        return res.status(500).json({ 
+          success: false,
+          error: 'Upload service not configured properly. Please contact support.'
+        });
+      }
+      
+      throw uploadError; // Re-throw to be caught by the outer catch
+    }
+  } catch (error) {
+    console.error('Upload error:', error);
     
-    if (err.code === 'ECONNABORTED') {
-      return res.status(408).json({ error: 'Upload timeout. Please try again.' });
+    let errorMessage = 'Failed to upload image';
+    
+    // Provide more specific error messages based on error type
+    if (error.code === 'ECONNABORTED') {
+      errorMessage = 'Upload timed out. Please try again.';
+    } else if (error.response) {
+      // Handle HTTP error responses
+      errorMessage = `Upload service error: ${error.response.status} - ${error.response.statusText}`;
     }
     
-    if (err.response) {
-      console.error('ImgBB response error:', err.response.data);
-      return res.status(err.response.status).json({ error: err.response.data });
-    }
-    
-    if (err.message === 'Only image files are allowed') {
-      return res.status(400).json({ error: 'Only image files are allowed' });
-    }
-    
-    if (err.message === 'IMGBB API key not set') {
-      return res.status(500).json({ error: 'Upload service not configured properly.' });
-    }
-    
-    res.status(500).json({ error: 'Upload failed. Please try again.' });
+    res.status(500).json({ 
+      success: false,
+      error: errorMessage,
+      ...(process.env.NODE_ENV === 'development' && {
+        details: error.message,
+        stack: error.stack
+      })
+    });
   }
 };
