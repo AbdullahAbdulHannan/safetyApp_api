@@ -23,9 +23,11 @@ app.use('/api/upload', uploadRoutes);
 const contactsRoutes = require('./routes/contactsRoutes');
 const userRoutes = require('./routes/userRoutes');
 const notificationRoutes = require('./routes/notificationRoutes');
+const callRoutes = require('./routes/callRoutes');
 app.use('/api/contacts', contactsRoutes);
 app.use('/api/users', userRoutes);
 app.use('/api/notifications', notificationRoutes);
+app.use('/api/calls', callRoutes);
 
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, '0.0.0.0', () => console.log(`Server running on port ${PORT}`)); 
