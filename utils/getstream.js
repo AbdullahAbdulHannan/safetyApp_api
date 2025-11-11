@@ -35,15 +35,14 @@ const upsertStreamUser = async (userId, userData) => {
     throw new Error('GetStream client not initialized');
   }
 
-  await streamClient.upsertUsers({
-    users: {
-      [userId]: {
-        id: userId,
-        name: userData.name || userData.fullname,
-        image: userData.profileImage || userData.image,
-      }
+  // Correct format for @stream-io/node-sdk upsertUsers
+  await streamClient.upsertUsers([
+    {
+      id: userId,
+      name: userData.name || userData.fullname,
+      image: userData.profileImage || userData.image,
     }
-  });
+  ]);
 };
 
 /**
